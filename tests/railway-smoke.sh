@@ -4,6 +4,7 @@
 #   tests/railway-smoke.sh https://app-domain https://supabase-gateway-domain
 # Optional:
 #   OWNER_EMAIL=... OWNER_PASSWORD_FILE=/path   sign in as the owner (the file holds the password)
+#   ALLOWED_EMAIL=...                           an address in MORPHIC_ALLOWED_SIGNUPS; checks it may sign up and use the app
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd); export REPO_ROOT
 usage="usage: railway-smoke.sh https://app https://supabase-gateway"
@@ -49,12 +50,20 @@ chat='{"trigger":"submit-message","chatId":"probe-chat","isNewChat":true,"messag
 assert_eq "anonymous chat is refused" "401" "$(http_code -X POST "$APP_URL/api/chat" -H 'Content-Type: application/json' --data "$chat")"
 assert_eq "advanced search is closed to the outside" "404" "$(http_code -X POST "$APP_URL/api/advanced-search" -H 'Content-Type: application/json' --data '{"query":"probe","maxResults":1}')"
 
+if [ -n "${ALLOWED_EMAIL:-}" ]; then
+  section "an allowlisted address signs up"
+  assert_eq "an address in MORPHIC_ALLOWED_SIGNUPS may sign up" "200" "$(sign_up "$ALLOWED_EMAIL" "$TEST_TMP/probe-pw")"
+  sign_in "$ALLOWED_EMAIL" "$TEST_TMP/probe-pw" "$TEST_TMP/allowed-token" && pass "and sign in" || fail "the allowlisted user could not sign in"
+  [ -s "$TEST_TMP/allowed-token" ] && assert_eq "the app accepts their session" "200" "$(app_code_as "$TEST_TMP/allowed-token" GET '/api/chats?offset=0&limit=1')"
+  assert_eq "a look-alike domain may not" "500" "$(sign_up "someone-$(date +%s)@not${ALLOWED_EMAIL#*@}" "$TEST_TMP/probe-pw")"
+fi
+
 if [ -n "${OWNER_EMAIL:-}" ] && [ -n "${OWNER_PASSWORD_FILE:-}" ]; then
   section "signed in as the owner"
   sign_in "$OWNER_EMAIL" "$OWNER_PASSWORD_FILE" "$TEST_TMP/owner-token" && pass "owner signs in" || fail "owner sign-in failed"
   if [ -s "$TEST_TMP/owner-token" ]; then
     assert_eq "the app accepts the owner's session" "200" "$(app_code_as "$TEST_TMP/owner-token" GET '/api/chats?offset=0&limit=1')"
-    if [ "${CHAT:-0}" = 1 ]; then
+    if [ "${MORPHIC_SMOKE_CHAT:-0}" = 1 ]; then
       reply=$(chat_as "$TEST_TMP/owner-token" "railway-smoke-$(date +%s)" "Reply with one short sentence." | stream_text)
       [ -n "$reply" ] && pass "the configured model answers a chat" || fail "no answer from the configured model"
     fi

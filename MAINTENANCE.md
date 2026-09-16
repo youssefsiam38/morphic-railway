@@ -18,7 +18,7 @@
    `railway templates update <id> --readme-file marketplace/OVERVIEW.md` if it changed. Never put
    angle-bracket placeholders in the overview: Railway strips them.
 5. Deploy the updated template into a scratch project, set a model key, run
-   `CHAT=1 tests/railway-smoke.sh https://<app> https://<kong>` with `OWNER_EMAIL` and
+   `MORPHIC_SMOKE_CHAT=1 tests/railway-smoke.sh https://<app> https://<kong>` with `OWNER_EMAIL` and
    `OWNER_PASSWORD_FILE`, then delete the scratch project.
 
 The four images are versioned together, so the template never mixes wrapper versions.
