@@ -1,5 +1,7 @@
 # Marketplace audit
 
+Published 2026-09-16 as **Morphic + SearXNG**, code `morphic-searxng`, category AI/ML.
+
 Checked 2026-09-16 against Railway's template search.
 
 ## Gap

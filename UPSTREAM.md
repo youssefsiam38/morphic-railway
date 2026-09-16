@@ -70,6 +70,6 @@ under a permissive licence.
 
 ## Published images
 
-`ghcr.io/youssefsiam38/morphic-railway-{db,kong,searxng,app}`, amd64, built and tested together by
+`ghcr.io/youssefsiam38/morphic-railway-{db,kong,searxng,app}`, `1.0.0`, amd64, built and tested together by
 `.github/workflows/publish-image.yml`. Each ships this repository's licence set at
 `/usr/share/licenses/morphic-railway/`.

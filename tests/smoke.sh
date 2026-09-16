@@ -63,15 +63,20 @@ assert_eq "anonymous chat is refused" "401" "$(http_code -X POST "$APP_URL/api/c
   --data '{"trigger":"submit-message","chatId":"anon-chat","isNewChat":true,"message":{"id":"m1","role":"user","parts":[{"type":"text","text":"hi"}]}}')"
 
 section "a chat, end to end"
-reply=$(chat_as "$TEST_TMP/owner-token" smoke-chat-1 "What is the capital of France?" | stream_text)
-assert_contains "the model's answer streams back" "Mock model answer: the bundle works." "$reply"
+raw=$(chat_as "$TEST_TMP/owner-token" smoke-chat-1 "What is the capital of France?")
+reply=$(stream_text <<<"$raw")
+assert_contains "the model's answer streams back" "Mock model answer: the bundle works" "$reply"
+assert_contains "the model called Morphic's search tool" '"toolName":"search"' "$raw"
+assert_contains "which ran an advanced search through SearXNG and returned its results to the model" "search tool returned [0-9][0-9]* results" "$reply"
+assert_not_contains "without a tool error" '"type":"tool-output-error"' "$raw"
+assert_contains "the search route was reached with the internal token" "Using BASE_URL environment variable" "$(compose logs --no-color --no-log-prefix app)"
 saved=""
 for _ in $(seq 1 20); do
-  saved=$(psql_morphic "select p.text_text from parts p join messages m on m.id = p.message_id
+  saved=$(psql_morphic "select string_agg(p.text_text, ' ') from parts p join messages m on m.id = p.message_id
     where m.chat_id = 'smoke-chat-1' and m.role = 'assistant' and p.type = 'text'" | tr -d '\n')
   [ -n "$saved" ] && break; sleep 1
 done
-assert_contains "the answer is saved with the chat" "Mock model answer: the bundle works." "$saved"
+assert_contains "the answer is saved with the chat" "Mock model answer: the bundle works" "$saved"
 owner_id=$(psql_admin "select id from auth.users where email = 'owner@example.com'")
 assert_eq "under the owner's id" "$owner_id" "$(psql_morphic "select user_id from chats where id = 'smoke-chat-1'")"
 sign_in friend@example.com "$TEST_TMP/other-pw" "$TEST_TMP/friend-token" && pass "the allowlisted user signs in" || fail "allowlisted sign-in failed"
