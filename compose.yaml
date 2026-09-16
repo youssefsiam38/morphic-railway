@@ -1,0 +1,130 @@
+# Local test topology. Mirrors the Railway service graph one-to-one: the same six services, the same
+# names, one volume per stateful service, and every value Railway passes as a variable reference
+# written out here. Wrapper images are built from this repository; CI and the Railway template use
+# the published GHCR images instead.
+#
+#   app       Morphic                  built here   public
+#   db        Supabase Postgres        wrapper      volume
+#   auth      Supabase Auth (GoTrue)   upstream
+#   kong      Supabase API gateway     wrapper      public
+#   searxng   SearXNG                  wrapper
+#   redis     Valkey (search cache)    upstream
+#
+# Every secret below is a fixed, public, local-test-only value. The Railway template generates real
+# ones. The browser and the app server must reach the gateway at the same URL, so Kong listens on the
+# same port inside as it is published on, under a network alias that also resolves on the host. Ports
+# move with MORPHIC_TEST_PORT and MORPHIC_TEST_GATEWAY_PORT.
+name: morphic-railway-test
+
+x-wrapper-build: &wrapper-build
+  context: .
+  args:
+    WRAPPER_VERSION: ${WRAPPER_VERSION:-0.0.0-local}
+    VCS_REF: ${VCS_REF:-local}
+
+services:
+  db:
+    build: { <<: *wrapper-build, dockerfile: images/db/Dockerfile }
+    image: ${MORPHIC_RAILWAY_DB_IMAGE:-morphic-railway-db:local}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: localtestonlypostgrespassword0000000000000000
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  auth:
+    image: docker.io/supabase/gotrue:v2.196.0@sha256:c0c25187a6b835e65a6f6e6c6b39d090e832d40e6de5186f2c038e0411944232
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      GOTRUE_API_HOST: "::"
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: http://kong.localhost:${MORPHIC_TEST_GATEWAY_PORT:-18700}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:localtestonlypostgrespassword0000000000000000@db:5432/postgres
+      GOTRUE_SITE_URL: http://localhost:${MORPHIC_TEST_PORT:-13700}
+      GOTRUE_URI_ALLOW_LIST: http://localhost:${MORPHIC_TEST_PORT:-13700}/**
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_SECRET: local-test-only-jwt-secret-000000000000000000000000000000
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+
+  kong:
+    build: { <<: *wrapper-build, dockerfile: images/kong/Dockerfile }
+    image: ${MORPHIC_RAILWAY_KONG_IMAGE:-morphic-railway-kong:local}
+    restart: unless-stopped
+    depends_on: [auth]
+    environment:
+      PORT: ${MORPHIC_TEST_GATEWAY_PORT:-18700}
+      JWT_SECRET: local-test-only-jwt-secret-000000000000000000000000000000
+      AUTH_HOST: auth
+    ports: ["127.0.0.1:${MORPHIC_TEST_GATEWAY_PORT:-18700}:${MORPHIC_TEST_GATEWAY_PORT:-18700}"]
+    networks:
+      default:
+        aliases: [kong.localhost]
+
+  searxng:
+    build: { <<: *wrapper-build, dockerfile: images/searxng/Dockerfile }
+    image: ${MORPHIC_RAILWAY_SEARXNG_IMAGE:-morphic-railway-searxng:local}
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: local-test-only-searxng-secret-0000000000000000
+
+  redis:
+    image: docker.io/valkey/valkey:8.1.10-alpine@sha256:d2e18f3410b6f616de1417f570fa55261af2898b9c5b2cfb6781ce2373ea43d1
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: localtestonlyredispassword000000
+    # The Railway template uses this exact start command; Railway does not expand variables in a start
+    # command, so the shell does.
+    command: ["sh", "-c", "exec valkey-server --requirepass \"$$REDIS_PASSWORD\" --bind :: 0.0.0.0"]
+
+  # Test-only stand-in for a model provider (profile mock-llm); never part of the template.
+  mock-llm:
+    profiles: [mock-llm]
+    image: docker.io/library/python:3.13-alpine@sha256:7415fbc3c9e4979cc717d92377ab2bc7b2b4a2af1ac03cc52b5f3f88efedaf3a
+    command: ["python", "/mock-llm.py"]
+    volumes: ["./tests/mock-llm.py:/mock-llm.py:ro"]
+
+  app:
+    build: { <<: *wrapper-build, dockerfile: images/app/Dockerfile }
+    image: ${MORPHIC_RAILWAY_APP_IMAGE:-morphic-railway-app:local}
+    restart: unless-stopped
+    depends_on: [kong, db]
+    environment:
+      PORT: "3000"
+      JWT_SECRET: local-test-only-jwt-secret-000000000000000000000000000000
+      DATABASE_URL: postgresql://postgres:localtestonlypostgrespassword0000000000000000@db:5432/morphic
+      SUPABASE_DB_URL: postgresql://postgres:localtestonlypostgrespassword0000000000000000@db:5432/postgres
+      SUPABASE_INTERNAL_URL: http://kong:${MORPHIC_TEST_GATEWAY_PORT:-18700}
+      NEXT_PUBLIC_SUPABASE_URL: http://kong.localhost:${MORPHIC_TEST_GATEWAY_PORT:-18700}
+      SEARXNG_API_URL: http://searxng:8080
+      LOCAL_REDIS_URL: redis://default:localtestonlyredispassword000000@redis:6379
+      OWNER_EMAIL: owner@example.com
+      OWNER_PASSWORD: local-test-only-owner-password
+      MORPHIC_SIGNUP_MODE: closed
+      MORPHIC_ALLOWED_SIGNUPS: ${MORPHIC_TEST_ALLOWED_SIGNUPS:-friend@example.com,@team.example.com}
+      OPENAI_COMPATIBLE_API_KEY: ${MORPHIC_TEST_LLM_KEY:-mock-llm-key}
+      OPENAI_COMPATIBLE_API_BASE_URL: ${MORPHIC_TEST_LLM_URL:-http://mock-llm:8000/v1}
+      OPENAI_COMPATIBLE_MODELS: ${MORPHIC_TEST_LLM_MODELS:-mock-model}
+    ports: ["127.0.0.1:${MORPHIC_TEST_PORT:-13700}:3000"]
+
+# IPv6 on, like Railway's private network: every service name resolves to an AAAA record as well,
+# and clients that prefer it (Kong does) expose any listener that is IPv4 only.
+networks:
+  default:
+    enable_ipv6: true
+
+volumes:
+  db:
